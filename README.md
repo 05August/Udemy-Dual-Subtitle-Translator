@@ -15,6 +15,8 @@ Free, unofficial, and not affiliated with Udemy.
 
 ## Install (unpacked)
 
+**Never used GitHub?** Follow the beginner guide: **[Install DualSub](INSTALL.md)** (Download ZIP, no Git).
+
 1. Download or clone this folder.
 2. Open `chrome://extensions`.
 3. Turn on **Developer mode**.

@@ -15,6 +15,8 @@ Miễn phí, không chính thức, không liên kết với Udemy.
 
 ## Cài đặt (unpacked)
 
+**Chưa dùng GitHub?** Xem hướng dẫn từng bước: **[Cài DualSub](INSTALL.vi.md)** (tải ZIP, không cần Git).
+
 1. Tải hoặc clone thư mục này.
 2. Mở `chrome://extensions`.
 3. Bật **Developer mode**.
