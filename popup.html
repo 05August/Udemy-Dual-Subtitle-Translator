@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Udemy Dual Subtitle Translator</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <p class="kicker">Udemy</p>
+      <h1>DualSub</h1>
+    </header>
+    <form id="form" class="form">
+      <label class="switch">
+        <input id="enabled" type="checkbox" />
+        Enable captions
+      </label>
+      <fieldset>
+        <legend>Mode</legend>
+        <label><input type="radio" name="mode" value="dual" /> Dual (source + target)</label>
+        <label><input type="radio" name="mode" value="target" /> Target only</label>
+      </fieldset>
+      <label>
+        Target language
+        <select id="targetLang"></select>
+      </label>
+      <label>
+        Font size <span id="fontSizeVal">100%</span>
+        <input id="fontSize" type="range" min="50" max="160" step="5" />
+      </label>
+      <label>
+        Font
+        <select id="fontFamily"></select>
+      </label>
+      <label>
+        Caption background <span id="bgOpacityVal">100%</span>
+        <input id="bgOpacity" type="range" min="0" max="100" step="5" />
+      </label>
+    </form>
+    <p id="hint" class="hint">Open a Udemy lecture, then turn DualSub on from the video panel.</p>
+    <script src="shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

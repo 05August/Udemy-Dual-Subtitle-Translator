@@ -1,0 +1,29 @@
+name: Language request
+description: Ask for another target language in DualSub
+title: "Language request: "
+labels: ["language-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Request a target language that is not in the DualSub dropdown yet.
+        Translations still depend on Google Translate supporting that language.
+  - type: input
+    id: language
+    attributes:
+      label: Language name
+      description: English name of the language
+      placeholder: e.g. Swedish
+    validations:
+      required: true
+  - type: input
+    id: code
+    attributes:
+      label: Language code (optional)
+      description: BCP-47 / Google Translate code if you know it
+      placeholder: e.g. sv
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      placeholder: Course language, why you need it, example words…

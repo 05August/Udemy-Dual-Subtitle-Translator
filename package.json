@@ -1,0 +1,8 @@
+{
+  "name": "udemy-dualsub",
+  "private": true,
+  "scripts": {
+    "lint": "node --check shared.js && node --check parser.js && node --check page-bridge.js && node --check background.js && node --check content.js && node --check popup.js",
+    "typecheck": "node --check shared.js && node --check parser.js && node --check page-bridge.js && node --check background.js && node --check content.js && node --check popup.js"
+  }
+}
