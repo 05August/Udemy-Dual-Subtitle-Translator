@@ -34,7 +34,7 @@ Caption text is sent to Google’s public translate endpoint to produce the targ
 ## Request a language
 
 Need a target language that is not in the list?  
-**[Open a language request](issues/new?template=language-request.yml)** — GitHub fills in the form for you.
+**[Open a language request](https://github.com/05August/Udemy-Dual-Subtitle-Translator/issues/new?template=language-request.yml)** — GitHub fills in the form for you.
 
 ## Disclaimer
 

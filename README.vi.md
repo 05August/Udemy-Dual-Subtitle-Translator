@@ -34,7 +34,7 @@ Nội dung caption được gửi tới endpoint dịch công khai của Google 
 ## Yêu cầu thêm ngôn ngữ
 
 Cần ngôn ngữ đích chưa có trong danh sách?  
-**[Tạo issue yêu cầu ngôn ngữ](issues/new?template=language-request.yml)** — GitHub mở sẵn form cho bạn.
+**[Tạo issue yêu cầu ngôn ngữ](https://github.com/05August/Udemy-Dual-Subtitle-Translator/issues/new?template=language-request.yml)** — GitHub mở sẵn form cho bạn.
 
 ## Tuyên bố miễn trừ
 
