@@ -154,6 +154,27 @@
   };
 
   try {
+    const origPush = history.pushState;
+    const origReplace = history.replaceState;
+    const notifyNav = () => {
+      window.postMessage({ channel: CHANNEL, type: "NAV" }, "*");
+    };
+    history.pushState = function udsPushState(...args) {
+      const ret = origPush.apply(this, args);
+      notifyNav();
+      return ret;
+    };
+    history.replaceState = function udsReplaceState(...args) {
+      const ret = origReplace.apply(this, args);
+      notifyNav();
+      return ret;
+    };
+    window.addEventListener("popstate", notifyNav);
+  } catch {
+    /* ignore */
+  }
+
+  try {
     const observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) rememberResource(entry.name);
     });

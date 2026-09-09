@@ -69,9 +69,14 @@ async function translateAll(texts, sl, tl) {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message && message.type === "FETCH_TEXT") {
-    fetch(message.url)
+    const url = String(message.url || "");
+    if (!/^https?:\/\//i.test(url)) {
+      sendResponse({ ok: false, error: "Invalid caption URL" });
+      return true;
+    }
+    fetch(url)
       .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res || !res.ok) throw new Error(`HTTP ${res && res.status ? res.status : "error"}`);
         return res.text();
       })
       .then((text) => sendResponse({ ok: true, text }))

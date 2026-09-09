@@ -20,7 +20,7 @@
     panelOpen: false,
     loadToken: 0,
     intercepted: new Map(),
-    pendingLecture: null,
+    pendingWaiters: [],
     overlayInNative: false,
     playerUiObserver: null,
     pointerX: null,
@@ -33,6 +33,8 @@
     lectureId: "",
     memoryCache: new Map(),
     retargetTimer: 0,
+    resizeObserver: null,
+    lastVideoRect: null,
   };
 
   const CUE_SELECTORS = [
@@ -126,20 +128,45 @@
     const cached = state.intercepted.get(lectureId);
     if (cached) return Promise.resolve(cached);
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        if (state.pendingLecture && state.pendingLecture.lectureId === lectureId) {
-          state.pendingLecture = null;
-        }
-        resolve(null);
-      }, timeoutMs);
-      state.pendingLecture = {
+      const waiter = {
         lectureId,
         resolve: (payload) => {
-          clearTimeout(timer);
+          clearTimeout(waiter.timer);
+          waiter.resolve = null;
           resolve(payload);
         },
+        timer: 0,
       };
+      waiter.timer = setTimeout(() => {
+        state.pendingWaiters = state.pendingWaiters.filter((item) => item !== waiter);
+        if (waiter.resolve) waiter.resolve(null);
+      }, timeoutMs);
+      state.pendingWaiters.push(waiter);
     });
+  }
+
+  function resolveWaiters(lectureId, payload) {
+    const keep = [];
+    for (const waiter of state.pendingWaiters) {
+      if (!waiter.lectureId || waiter.lectureId === lectureId) {
+        if (waiter.resolve) waiter.resolve(payload);
+      } else {
+        keep.push(waiter);
+      }
+    }
+    state.pendingWaiters = keep;
+  }
+
+  function cancelWaitersExcept(lectureId) {
+    const keep = [];
+    for (const waiter of state.pendingWaiters) {
+      if (lectureId && waiter.lectureId === lectureId) {
+        keep.push(waiter);
+      } else if (waiter.resolve) {
+        waiter.resolve(null);
+      }
+    }
+    state.pendingWaiters = keep;
   }
 
   function ingestLecture(url, text) {
@@ -165,14 +192,7 @@
     }
     const payload = { courseId: ids.courseId, captions, via: "intercept" };
     if (ids.lectureId) state.intercepted.set(ids.lectureId, payload);
-    if (
-      state.pendingLecture &&
-      (!state.pendingLecture.lectureId || state.pendingLecture.lectureId === ids.lectureId)
-    ) {
-      const pending = state.pendingLecture;
-      state.pendingLecture = null;
-      pending.resolve(payload);
-    }
+    resolveWaiters(ids.lectureId, payload);
   }
 
   function bridgeFetch(url) {
@@ -189,7 +209,7 @@
         clearTimeout(timer);
         window.removeEventListener("message", onMessage);
         if (!msg.ok) {
-          reject(new Error(msg.error || `HTTP ${msg.status}`));
+          reject(new Error(msg.error || `HTTP ${msg.status == null ? "error" : msg.status}`));
           return;
         }
         resolve(msg.text);
@@ -197,6 +217,21 @@
       window.addEventListener("message", onMessage);
       window.postMessage({ channel: UDS.BRIDGE, type: "FETCH", id, url }, "*");
     });
+  }
+
+  function captionFileUrl(caption) {
+    if (!caption || typeof caption !== "object") return "";
+    const raw = caption.url || caption.file || caption.path || "";
+    if (typeof raw !== "string" || !raw.trim()) return "";
+    try {
+      return new URL(raw, location.href).href;
+    } catch {
+      return "";
+    }
+  }
+
+  function captionsReady(captions) {
+    return Array.isArray(captions) && captions.some((item) => captionFileUrl(item));
   }
 
   function pickCaption(captions, sourceLocale) {
@@ -238,36 +273,33 @@
 
   async function loadLectureAsset(ctx) {
     log(`load lecture ${ctx.lectureId} · slug=${ctx.slug} · host=${location.host}`);
+    const fromMemory = state.intercepted.get(ctx.lectureId);
+    if (fromMemory && captionsReady(fromMemory.captions)) {
+      log(`using intercept memory · courseId=${fromMemory.courseId}`);
+      return fromMemory;
+    }
+
     const snapshot = await pingBridge();
     log(
       `bridge ${snapshot ? "ok" : "timeout"} · cache=${Boolean(snapshot && snapshot.lecture)} · res=${
         snapshot && snapshot.resources ? snapshot.resources.length : 0
       }`
     );
-    if (snapshot && snapshot.globals) {
-      log(`UD=${snapshot.globals.hasUD} courseGlobal=${snapshot.globals.courseId || "none"}`);
-    }
-    if (snapshot && snapshot.resources && snapshot.resources.length) {
-      const short = snapshot.resources
-        .slice(-4)
-        .map((url) => url.replace(/^https?:\/\/[^/]+/, ""))
-        .join(" | ");
-      log(`api seen: ${short}`);
-    }
-
     const fromCache = lectureFromPayload(snapshot && snapshot.lecture, ctx.lectureId);
-    if (fromCache && fromCache.captions.length) {
+    if (fromCache && captionsReady(fromCache.captions)) {
       log(`using intercept cache · courseId=${fromCache.courseId} · captions=${fromCache.captions.length}`);
       return fromCache;
     }
 
-    const memory = state.intercepted.get(ctx.lectureId);
-    if (memory && memory.captions.length) {
-      log(`using intercept memory · courseId=${memory.courseId}`);
-      return memory;
+    setStatus("Waiting for Udemy lecture API…");
+    const waited = await waitForLecture(ctx.lectureId, 10000);
+    if (waited && captionsReady(waited.captions)) {
+      log(`caught intercept · courseId=${waited.courseId} · captions=${waited.captions.length}`);
+      return waited;
     }
 
-    const courseId = courseIdFromSnapshot(snapshot, ctx);
+    const laterSnapshot = await pingBridge();
+    const courseId = courseIdFromSnapshot(laterSnapshot || snapshot, ctx);
     if (courseId) {
       log(`courseId=${courseId} → fetching lecture API`);
       const text = await bridgeFetch(lectureApiUrl(ctx, courseId));
@@ -275,24 +307,36 @@
       const captions =
         data && data.asset && Array.isArray(data.asset.captions) ? data.asset.captions : [];
       log(`lecture API captions=${captions.length}`);
-      return { courseId, captions, via: "fetch" };
+      if (captionsReady(captions)) {
+        const payload = { courseId, captions, via: "fetch" };
+        state.intercepted.set(ctx.lectureId, payload);
+        return payload;
+      }
     }
 
-    log("no courseId yet, waiting for Udemy lecture API…");
-    setStatus("Waiting for Udemy lecture API…");
-    const waited = await waitForLecture(ctx.lectureId, 12000);
-    if (waited && waited.captions) {
-      log(`caught intercept · courseId=${waited.courseId} · captions=${waited.captions.length}`);
-      return waited;
+    const retry = await waitForLecture(ctx.lectureId, 8000);
+    if (retry && captionsReady(retry.captions)) {
+      log(`late intercept · courseId=${retry.courseId} · captions=${retry.captions.length}`);
+      return retry;
     }
 
     throw new Error("Could not get the course id / lecture API. Reload the lecture and try again.");
   }
 
   async function fetchVtt(url) {
-    const res = await sendRuntime({ type: "FETCH_TEXT", url });
-    if (!res || !res.ok) throw new Error((res && res.error) || "Could not download the VTT file");
-    return res.text;
+    const absolute = captionFileUrl({ url }) || String(url || "");
+    if (!/^https?:\/\//i.test(absolute)) {
+      throw new Error("Caption file URL is missing");
+    }
+    try {
+      const res = await sendRuntime({ type: "FETCH_TEXT", url: absolute });
+      if (res && res.ok && res.text) return res.text;
+      log(`SW VTT failed: ${(res && res.error) || "empty response"}`);
+    } catch (err) {
+      log(`SW VTT error: ${err.message || err}`);
+    }
+    log("VTT fallback via page fetch");
+    return bridgeFetch(absolute);
   }
 
   async function hashSource(text) {
@@ -547,6 +591,9 @@
           padding: 0 4%;
           transition: top 0.18s ease-out;
         }
+        #uds-caption-overlay.uds-fallback.uds-no-motion {
+          transition: none !important;
+        }
         #uds-caption-overlay .uds-row {
           display: block;
           box-sizing: border-box;
@@ -742,25 +789,44 @@
     }
   }
 
+  function videoRectReady(rect) {
+    return Boolean(rect && rect.width >= 160 && rect.height >= 90 && rect.bottom - rect.top >= 90);
+  }
+
+  function snapOverlay(on) {
+    if (!state.overlay) return;
+    state.overlay.classList.toggle("uds-no-motion", Boolean(on));
+  }
+
   function placeChrome() {
     const video = state.video;
     if (!video || !state.fab || !state.panel) return;
     const rect = video.getBoundingClientRect();
+    if (!videoRectReady(rect)) return;
+    const jumped =
+      state.lastVideoRect &&
+      (Math.abs(rect.left - state.lastVideoRect.left) > 40 ||
+        Math.abs(rect.top - state.lastVideoRect.top) > 40 ||
+        Math.abs(rect.width - state.lastVideoRect.width) > 40 ||
+        Math.abs(rect.height - state.lastVideoRect.height) > 40);
+    if (jumped) snapOverlay(true);
+    state.lastVideoRect = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+    };
     if (state.overlay) {
-      if (rect.width < 80 || rect.height < 80) {
-        state.overlay.style.display = "none";
+      state.overlay.style.left = `${rect.left}px`;
+      state.overlay.style.width = `${rect.width}px`;
+      state.overlay.style.setProperty("--uds-caption-max", `${Math.round(rect.width * 0.86)}px`);
+      const raised = Math.max(108, Math.round(rect.height * 0.16));
+      const gap = Math.max(24, Math.round(rect.height * 0.035));
+      if (isProgressBarVisible(video)) {
+        state.overlay.style.top = `${rect.bottom - raised}px`;
       } else {
-        state.overlay.style.left = `${rect.left}px`;
-        state.overlay.style.width = `${rect.width}px`;
-        state.overlay.style.setProperty("--uds-caption-max", `${Math.round(rect.width * 0.86)}px`);
-        const raised = Math.max(108, Math.round(rect.height * 0.16));
-        const gap = Math.max(24, Math.round(rect.height * 0.035));
-        if (isProgressBarVisible(video)) {
-          state.overlay.style.top = `${rect.bottom - raised}px`;
-        } else {
-          const overlayH = Math.max(state.overlay.offsetHeight, 44);
-          state.overlay.style.top = `${rect.bottom - gap - overlayH}px`;
-        }
+        const overlayH = Math.max(state.overlay.offsetHeight, 44);
+        state.overlay.style.top = `${rect.bottom - gap - overlayH}px`;
       }
     }
     const fabLeft = Math.min(window.innerWidth - 132, rect.right - 124);
@@ -769,6 +835,9 @@
     state.fab.style.top = `${fabTop}px`;
     state.panel.style.left = `${Math.min(window.innerWidth - 336, Math.max(12, rect.right - 332))}px`;
     state.panel.style.top = `${Math.min(window.innerHeight - 24, fabTop + 44)}px`;
+    if (jumped) {
+      requestAnimationFrame(() => snapOverlay(false));
+    }
   }
 
   let placeRaf = 0;
@@ -788,17 +857,40 @@
     placeChrome();
   }
 
+  function unbindVideo(video) {
+    if (!video) return;
+    video.removeEventListener("timeupdate", onTick);
+    video.removeEventListener("play", onTick);
+    video.removeEventListener("seeked", onTick);
+    video.removeEventListener("loadedmetadata", onTick);
+    video.removeEventListener("loadeddata", onTick);
+    video.removeEventListener("resize", onTick);
+    video.removeEventListener("webkitbeginfullscreen", onTick);
+    video.removeEventListener("webkitendfullscreen", onTick);
+  }
+
   function bindVideo(video) {
-    if (state.video === video) return;
+    if (state.video === video) {
+      schedulePlace();
+      return;
+    }
     if (state.playerUiObserver) {
       state.playerUiObserver.disconnect();
       state.playerUiObserver = null;
     }
+    if (state.resizeObserver) {
+      state.resizeObserver.disconnect();
+      state.resizeObserver = null;
+    }
+    unbindVideo(state.video);
     state.video = video;
+    state.lastVideoRect = null;
     video.addEventListener("timeupdate", onTick);
     video.addEventListener("play", onTick);
     video.addEventListener("seeked", onTick);
     video.addEventListener("loadedmetadata", onTick);
+    video.addEventListener("loadeddata", onTick);
+    video.addEventListener("resize", onTick);
     video.addEventListener("webkitbeginfullscreen", onTick);
     video.addEventListener("webkitendfullscreen", onTick);
     const root =
@@ -813,6 +905,10 @@
         attributeFilter: ["class", "style"],
         subtree: true,
       });
+    }
+    if (typeof ResizeObserver === "function") {
+      state.resizeObserver = new ResizeObserver(schedulePlace);
+      state.resizeObserver.observe(video);
     }
     onTick();
   }
@@ -856,7 +952,8 @@
       state.captions = captions;
       fillSourceSelect(captions, state.settings.sourceLocale);
       const caption = pickCaption(captions, state.settings.sourceLocale);
-      if (!caption || !caption.url) {
+      const vttUrl = captionFileUrl(caption);
+      if (!caption || !vttUrl) {
         if (state.customCues && state.customCues.length) {
           setStatus("This lecture has no captions — using your uploaded file.", "ok");
           onTick();
@@ -864,7 +961,7 @@
         }
         throw new Error("This lecture has no captions. Upload an SRT/VTT file.");
       }
-      const vtt = await fetchVtt(caption.url);
+      const vtt = await fetchVtt(vttUrl);
       if (token !== state.loadToken) return;
       const cues = parseSubtitle(vtt);
       if (!cues.length) throw new Error("The caption file is empty or could not be parsed.");
@@ -1119,30 +1216,39 @@
     );
   }
 
+  function onLectureChange() {
+    const ctx = lectureContext();
+    const key = `${ctx.slug}:${ctx.lectureId}`;
+    if (key === state.lectureKey) return;
+    state.lectureKey = key;
+    state.customCues = null;
+    state.cues = [];
+    state.baseCues = [];
+    state.lastVideoRect = null;
+    cancelWaitersExcept(ctx.lectureId);
+    snapOverlay(true);
+    requestAnimationFrame(() => {
+      placeChrome();
+      requestAnimationFrame(() => snapOverlay(false));
+    });
+    applyCaptions();
+  }
+
   function watchLecture() {
-    const tick = () => {
-      const ctx = lectureContext();
-      const key = `${ctx.slug}:${ctx.lectureId}`;
-      if (key === state.lectureKey) return;
-      state.lectureKey = key;
-      state.customCues = null;
-      state.cues = [];
-      state.baseCues = [];
-      if (state.pendingLecture) {
-        state.pendingLecture.resolve(null);
-        state.pendingLecture = null;
-      }
-      applyCaptions();
-    };
-    tick();
-    setInterval(tick, 700);
-    window.addEventListener("popstate", tick);
+    onLectureChange();
+    setInterval(onLectureChange, 400);
+    window.addEventListener("popstate", onLectureChange);
   }
 
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const msg = event.data;
-    if (!msg || msg.channel !== UDS.BRIDGE || msg.type !== "LECTURE_JSON") return;
+    if (!msg || msg.channel !== UDS.BRIDGE) return;
+    if (msg.type === "NAV") {
+      onLectureChange();
+      return;
+    }
+    if (msg.type !== "LECTURE_JSON") return;
     ingestLecture(msg.url, msg.text);
   });
 
